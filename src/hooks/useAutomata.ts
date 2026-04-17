@@ -12,7 +12,7 @@
  * to the Canvas and Academic Panel via React context.
  */
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import type {
   StateNode,
@@ -26,6 +26,14 @@ import {
   classifyAutomaton,
   extractAlphabet,
 } from '../core/AutomataEngine';
+
+export type Snapshot = {
+  states: StateNode[];
+  transitions: TransitionEntry[];
+  startStateId: string | null;
+  acceptingStateIds: Set<string>;
+  stateCounter: number;
+};
 
 export interface AutomataState {
   states: StateNode[];
@@ -58,6 +66,8 @@ export interface AutomataActions {
   clearAll: () => void;
   /** Rename a state label */
   renameState: (stateId: string, newLabel: string) => void;
+  /** Undo the last added action */
+  undoAction: () => void;
 }
 
 export function useAutomata(): AutomataState & AutomataActions {
@@ -66,6 +76,26 @@ export function useAutomata(): AutomataState & AutomataActions {
   const [startStateId, setStartStateId] = useState<string | null>(null);
   const [acceptingStateIds, setAcceptingStateIds] = useState<Set<string>>(new Set());
   const [stateCounter, setStateCounter] = useState(0);
+
+  const [history, setHistory] = useState<Snapshot[]>([]);
+  const stateRef = useRef({ states, transitions, startStateId, acceptingStateIds, stateCounter });
+
+  useEffect(() => {
+    stateRef.current = { states, transitions, startStateId, acceptingStateIds, stateCounter };
+  }, [states, transitions, startStateId, acceptingStateIds, stateCounter]);
+
+  const saveSnapshot = () => {
+    setHistory((prev) => [
+      ...prev,
+      {
+        states: [...stateRef.current.states],
+        transitions: [...stateRef.current.transitions],
+        startStateId: stateRef.current.startStateId,
+        acceptingStateIds: new Set(stateRef.current.acceptingStateIds),
+        stateCounter: stateRef.current.stateCounter,
+      }
+    ]);
+  };
 
   // Derive automaton type and alphabet from current transitions
   const transitionMap = useMemo(
@@ -89,6 +119,7 @@ export function useAutomata(): AutomataState & AutomataActions {
    */
   const addState = useCallback(
     (x: number, y: number): StateNode => {
+      saveSnapshot();
       const newState: StateNode = {
         id: uuidv4(),
         label: `q${stateCounter}`,
@@ -117,6 +148,7 @@ export function useAutomata(): AutomataState & AutomataActions {
    */
   const removeState = useCallback(
     (stateId: string) => {
+      saveSnapshot();
       setStates((prev) => prev.filter((s) => s.id !== stateId));
       setTransitions((prev) =>
         prev.filter(
@@ -138,6 +170,7 @@ export function useAutomata(): AutomataState & AutomataActions {
   /** Updates a state's canvas position (called during drag events) */
   const updateStatePosition = useCallback(
     (stateId: string, x: number, y: number) => {
+      saveSnapshot();
       setStates((prev) =>
         prev.map((s) => (s.id === stateId ? { ...s, x, y } : s))
       );
@@ -147,6 +180,7 @@ export function useAutomata(): AutomataState & AutomataActions {
 
   /** Toggles a state's membership in the accepting set F */
   const toggleAccepting = useCallback((stateId: string) => {
+    saveSnapshot();
     setAcceptingStateIds((prev) => {
       const next = new Set(prev);
       if (next.has(stateId)) {
@@ -165,6 +199,7 @@ export function useAutomata(): AutomataState & AutomataActions {
 
   /** Sets a state as q₀ (the unique start state) */
   const setStartState = useCallback((stateId: string) => {
+    saveSnapshot();
     setStartStateId(stateId);
     setStates((prev) =>
       prev.map((s) => ({
@@ -177,6 +212,7 @@ export function useAutomata(): AutomataState & AutomataActions {
   /** Adds a new transition δ(from, symbol) → to */
   const addTransition = useCallback(
     (fromId: string, toId: string, symbol: AlphabetSymbol) => {
+      saveSnapshot();
       // Check for duplicate transitions
       const exists = transitions.some(
         (t) =>
@@ -199,11 +235,13 @@ export function useAutomata(): AutomataState & AutomataActions {
 
   /** Removes a transition by ID */
   const removeTransition = useCallback((transitionId: string) => {
+    saveSnapshot();
     setTransitions((prev) => prev.filter((t) => t.id !== transitionId));
   }, []);
 
   /** Loads a preset automaton, replacing the current configuration */
   const loadPreset = useCallback((preset: AutomatonPreset) => {
+    saveSnapshot();
     setStates(preset.states);
     setTransitions(preset.transitions);
 
@@ -224,6 +262,7 @@ export function useAutomata(): AutomataState & AutomataActions {
 
   /** Clears all states, transitions, and configuration */
   const clearAll = useCallback(() => {
+    saveSnapshot();
     setStates([]);
     setTransitions([]);
     setStartStateId(null);
@@ -234,12 +273,27 @@ export function useAutomata(): AutomataState & AutomataActions {
   /** Renames a state's label */
   const renameState = useCallback(
     (stateId: string, newLabel: string) => {
+      saveSnapshot();
       setStates((prev) =>
         prev.map((s) => (s.id === stateId ? { ...s, label: newLabel } : s))
       );
     },
     []
   );
+
+  /** Undo the last action added */
+  const undoAction = useCallback(() => {
+    setHistory((prev) => {
+      if (prev.length === 0) return prev;
+      const snapshot = prev[prev.length - 1];
+      setStates(snapshot.states);
+      setTransitions(snapshot.transitions);
+      setStartStateId(snapshot.startStateId);
+      setAcceptingStateIds(snapshot.acceptingStateIds);
+      setStateCounter(snapshot.stateCounter);
+      return prev.slice(0, -1);
+    });
+  }, []);
 
   return {
     states,
@@ -256,6 +310,7 @@ export function useAutomata(): AutomataState & AutomataActions {
     setStartState,
     addTransition,
     removeTransition,
+    undoAction,
     loadPreset,
     clearAll,
     renameState,

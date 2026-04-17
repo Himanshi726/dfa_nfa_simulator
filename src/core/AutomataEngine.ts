@@ -93,9 +93,12 @@ export function buildTransitionMap(
  */
 export function epsilonClosure(
   stateLabels: Set<State>,
-  transitionMap: TransitionMap
-): Set<State> {
+  transitionMap: TransitionMap,
+  stateIdMap?: Record<State, string>,
+  transitions?: TransitionEntry[]
+): { states: Set<State>, transitionIds: Set<string> } {
   const closure = new Set<State>(stateLabels);
+  const transitionIds = new Set<string>();
   const queue: State[] = [...stateLabels];
 
   // BFS: explore all states reachable via ε-transitions
@@ -107,11 +110,18 @@ export function epsilonClosure(
       if (!closure.has(target)) {
         closure.add(target);
         queue.push(target);
+        
+        if (stateIdMap && transitions) {
+          const fromId = stateIdMap[currentState];
+          const toId = stateIdMap[target];
+          const trans = transitions.find(t => t.fromStateId === fromId && t.toStateId === toId && t.symbol === EPSILON);
+          if (trans) transitionIds.add(trans.id);
+        }
       }
     }
   }
 
-  return closure;
+  return { states: closure, transitionIds };
 }
 
 /**
@@ -131,18 +141,29 @@ export function epsilonClosure(
 export function move(
   currentStates: Set<State>,
   symbol: AlphabetSymbol,
-  transitionMap: TransitionMap
-): Set<State> {
+  transitionMap: TransitionMap,
+  stateIdMap?: Record<State, string>,
+  transitions?: TransitionEntry[]
+): { nextStates: Set<State>, transitionIds: Set<string> } {
   const nextStates = new Set<State>();
+  const transitionIds = new Set<string>();
 
   for (const state of currentStates) {
     const targets = transitionMap[state]?.[symbol] ?? [];
     for (const target of targets) {
       nextStates.add(target);
+      
+      if (stateIdMap && transitions) {
+        const fromId = stateIdMap[state];
+        const toId = stateIdMap[target];
+        // Note: Multiple transitions might exist for the same symbol/nodes in raw form
+        const transList = transitions.filter(t => t.fromStateId === fromId && t.toStateId === toId && t.symbol === symbol);
+        transList.forEach(t => transitionIds.add(t.id));
+      }
     }
   }
 
-  return nextStates;
+  return { nextStates, transitionIds };
 }
 
 /**
@@ -225,7 +246,8 @@ export function simulateDFA(
   startStateLabel: State,
   acceptingStateLabels: Set<State>,
   transitionMap: TransitionMap,
-  stateIdMap: Record<State, string>
+  stateIdMap: Record<State, string>,
+  transitions: TransitionEntry[]
 ): SimulationResult {
   const steps: SimulationStep[] = [];
   let currentState: State = startStateLabel;
@@ -235,6 +257,7 @@ export function simulateDFA(
     stepIndex: 0,
     symbolConsumed: null,
     activeStateIds: new Set([stateIdMap[currentState]]),
+    activeTransitionIds: new Set(),
     description: `Start at state ${currentState}`,
   });
 
@@ -249,6 +272,7 @@ export function simulateDFA(
         stepIndex: i + 1,
         symbolConsumed: symbol,
         activeStateIds: new Set<string>(),
+        activeTransitionIds: new Set<string>(),
         description: `δ(${currentState}, ${symbol}) = ∅ — no transition (DEAD STATE)`,
       });
       return {
@@ -260,11 +284,19 @@ export function simulateDFA(
     }
 
     // DFA: exactly one transition
-    currentState = nextStates[0];
+    const nextState = nextStates[0];
+    
+    // Find transition used
+    const fromId = stateIdMap[currentState];
+    const toId = stateIdMap[nextState];
+    const transitionUsed = transitions.find(t => t.fromStateId === fromId && t.toStateId === toId && t.symbol === symbol);
+
+    currentState = nextState;
     steps.push({
       stepIndex: i + 1,
       symbolConsumed: symbol,
       activeStateIds: new Set([stateIdMap[currentState]]),
+      activeTransitionIds: new Set(transitionUsed ? [transitionUsed.id] : []),
       description: `δ(${steps[i].description.split(' ').pop()}, ${symbol}) = ${currentState}`,
     });
   }
@@ -317,14 +349,17 @@ export function simulateNFA(
   startStateLabel: State,
   acceptingStateLabels: Set<State>,
   transitionMap: TransitionMap,
-  stateIdMap: Record<State, string>
+  stateIdMap: Record<State, string>,
+  transitions: TransitionEntry[]
 ): SimulationResult {
   const steps: SimulationStep[] = [];
 
   // Step 0: Compute ε-closure of the start state
-  let currentActiveStates = epsilonClosure(
+  let { states: currentActiveStates, transitionIds: stepEpsilonTrans } = epsilonClosure(
     new Set([startStateLabel]),
-    transitionMap
+    transitionMap,
+    stateIdMap,
+    transitions
   );
 
   const activeIds = new Set(
@@ -336,6 +371,7 @@ export function simulateNFA(
     stepIndex: 0,
     symbolConsumed: null,
     activeStateIds: activeIds,
+    activeTransitionIds: stepEpsilonTrans,
     description: `ε-closure({${startStateLabel}}) = ${closureStr}`,
   });
 
@@ -344,15 +380,22 @@ export function simulateNFA(
     const symbol = inputString[i];
 
     // Step a: Compute move(currentActiveStates, symbol)
-    const moveResult = move(currentActiveStates, symbol, transitionMap);
+    const { nextStates: moveResultStates, transitionIds: moveTrans } = move(
+      currentActiveStates, symbol, transitionMap, stateIdMap, transitions
+    );
 
     // Step b: Compute ε-closure of the move result
-    const nextActiveStates = epsilonClosure(moveResult, transitionMap);
+    const { states: nextActiveStates, transitionIds: subEpsilonTrans } = epsilonClosure(
+      moveResultStates, transitionMap, stateIdMap, transitions
+    );
 
     // Record the step
     const nextIds = new Set(
       [...nextActiveStates].map((s) => stateIdMap[s]).filter(Boolean)
     );
+    
+    // Combine transition IDs
+    const combinedTransIds = new Set([...moveTrans, ...subEpsilonTrans]);
 
     const fromStr = `{${[...currentActiveStates].join(', ')}}`;
     const toStr =
@@ -364,6 +407,7 @@ export function simulateNFA(
       stepIndex: i + 1,
       symbolConsumed: symbol,
       activeStateIds: nextIds,
+      activeTransitionIds: combinedTransIds,
       description: `ε-closure(move(${fromStr}, ${symbol})) = ${toStr}`,
     });
 
@@ -470,7 +514,8 @@ export function simulate(
       startLabel,
       acceptingLabels,
       transitionMap,
-      stateIdMap
+      stateIdMap,
+      transitions
     );
   } else {
     // NFA and ε-NFA both use the parallel tracking algorithm
@@ -479,7 +524,8 @@ export function simulate(
       startLabel,
       acceptingLabels,
       transitionMap,
-      stateIdMap
+      stateIdMap,
+      transitions
     );
   }
 }

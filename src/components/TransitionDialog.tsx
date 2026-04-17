@@ -19,12 +19,13 @@ interface TransitionDialogProps {
 }
 
 export const TransitionDialog: React.FC<TransitionDialogProps> = ({
-  fromStateId,
+  fromStateId: initialFromStateId,
   fromStateLabel,
   states,
   onAdd,
   onClose,
 }) => {
+  const [fromStateId, setFromStateId] = useState(initialFromStateId || (states[0]?.id ?? ''));
   const [toStateId, setToStateId] = useState(states[0]?.id ?? '');
   const [symbol, setSymbol] = useState('');
   const [useEpsilon, setUseEpsilon] = useState(false);
@@ -38,7 +39,7 @@ export const TransitionDialog: React.FC<TransitionDialogProps> = ({
     (e: React.FormEvent) => {
       e.preventDefault();
       const finalSymbol = useEpsilon ? EPSILON : symbol.trim();
-      if (!finalSymbol || !toStateId) return;
+      if (!finalSymbol || !toStateId || !fromStateId) return;
       onAdd(fromStateId, toStateId, finalSymbol);
       onClose();
     },
@@ -57,15 +58,25 @@ export const TransitionDialog: React.FC<TransitionDialogProps> = ({
   return (
     <div className="dialog-overlay" onClick={onClose}>
       <div className="dialog" onClick={(e) => e.stopPropagation()}>
-        <h3>
-          Add Transition from{' '}
-          <span style={{ color: 'var(--accent-cyan)' }}>{fromStateLabel}</span>
-        </h3>
-
         <form onSubmit={handleSubmit}>
+          {/* Source state selection */}
+          <div className="dialog-field">
+            <label>From State</label>
+            <select
+              value={fromStateId}
+              onChange={(e) => setFromStateId(e.target.value)}
+            >
+              {states.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
           {/* Target state selection */}
           <div className="dialog-field">
-            <label>Target State</label>
+            <label>To State</label>
             <select
               value={toStateId}
               onChange={(e) => setToStateId(e.target.value)}

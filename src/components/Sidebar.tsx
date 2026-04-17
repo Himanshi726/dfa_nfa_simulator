@@ -20,6 +20,13 @@ import {
   Sparkles,
   Trash2,
   X,
+  Undo,
+  Regex,
+  Zap,
+  CheckCircle,
+  AlertCircle,
+  ToggleLeft,
+  ToggleRight,
 } from 'lucide-react';
 import type {
   StateNode,
@@ -43,8 +50,19 @@ interface SidebarProps {
   simulationResult: SimulationResult | null;
   currentStepIndex: number;
   onLoadPreset: (preset: AutomatonPreset) => void;
+  onAddTransitionClick: () => void;
   onRemoveTransition: (id: string) => void;
+  onUndoAction: () => void;
   onClearAll: () => void;
+  // Regex mode props
+  regexMode: boolean;
+  regexPattern: string;
+  regexError?: string;
+  regexParsed: string;
+  onToggleRegexMode: () => void;
+  onRegexPatternChange: (pattern: string) => void;
+  onCompileRegex: () => void;
+  onCompileRegexDFA: () => void;
 }
 
 /**
@@ -82,8 +100,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
   simulationResult,
   currentStepIndex,
   onLoadPreset,
+  onAddTransitionClick,
   onRemoveTransition,
+  onUndoAction,
   onClearAll,
+  regexMode,
+  regexPattern,
+  regexError,
+  regexParsed,
+  onToggleRegexMode,
+  onRegexPatternChange,
+  onCompileRegex,
+  onCompileRegexDFA,
 }) => {
   // Build the formal definition strings
   const stateLabels = states.map((s) => s.label);
@@ -144,6 +172,81 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <div className="sidebar-panel">
+      {/* ═══ Regex Mode Section ═══ */}
+      <div className="sidebar-section regex-section">
+        <div className="section-title" style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <Regex size={14} />
+            Regular Expression
+          </div>
+          <button
+            className="regex-toggle-btn"
+            onClick={onToggleRegexMode}
+            title={regexMode ? 'Disable Regex Mode' : 'Enable Regex Mode'}
+          >
+            {regexMode ? <ToggleRight size={22} color="#db2777" /> : <ToggleLeft size={22} />}
+          </button>
+        </div>
+
+        {regexMode && (
+          <div className="regex-input-area">
+            <div className="regex-input-row">
+              <input
+                type="text"
+                className="input-field regex-input"
+                placeholder='e.g. (a|b)*abb'
+                value={regexPattern}
+                onChange={(e) => onRegexPatternChange(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') onCompileRegex();
+                }}
+                id="regex-input"
+              />
+            </div>
+            <div className="regex-input-row" style={{ marginTop: 8 }}>
+              <button
+                className="btn btn-primary regex-compile-btn"
+                onClick={onCompileRegex}
+                disabled={!regexPattern.trim()}
+                title="Compile regex to ε-NFA (Thompson's Construction)"
+                style={{ flex: 1 }}
+              >
+                <Sparkles size={14} />
+                Build NFA
+              </button>
+              <button
+                className="btn btn-primary regex-compile-btn"
+                onClick={onCompileRegexDFA}
+                disabled={!regexPattern.trim()}
+                title="Compile regex to DFA (Subset Construction)"
+                style={{ flex: 1, background: 'linear-gradient(135deg, #db2777 0%, #9333ea 100%)' }}
+              >
+                <Zap size={14} />
+                Build DFA
+              </button>
+            </div>
+
+            {/* Status indicator */}
+            {regexError && (
+              <div className="regex-status regex-status-error">
+                <AlertCircle size={13} />
+                <span>{regexError}</span>
+              </div>
+            )}
+            {regexParsed && !regexError && (
+              <div className="regex-status regex-status-success">
+                <CheckCircle size={13} />
+                <span>Parsed: <code>{regexParsed}</code></span>
+              </div>
+            )}
+
+            <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: 8, lineHeight: 1.6, opacity: 0.7 }}>
+              Syntax: <code>a|b</code> union · <code>ab</code> concat · <code>a*</code> star · <code>a+</code> one+ · <code>a?</code> opt · <code>()</code> group
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Automaton Type & Actions */}
       <div className="sidebar-section" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -152,16 +255,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {states.length} states · {transitions.length} transitions
           </span>
         </div>
-        {states.length > 0 && (
+        <div style={{ display: 'flex', gap: 4 }}>
           <button
             className="btn btn-ghost"
             style={{ padding: '4px 8px', fontSize: '0.7rem' }}
-            onClick={onClearAll}
-            title="Clear all"
+            onClick={onUndoAction}
+            title="Undo last action"
           >
-            <Trash2 size={13} />
+            <Undo size={13} />
           </button>
-        )}
+          {states.length > 0 && (
+            <button
+              className="btn btn-ghost"
+              style={{ padding: '4px 8px', fontSize: '0.7rem' }}
+              onClick={onClearAll}
+              title="Clear all"
+            >
+              <Trash2 size={13} />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Formal Definition — M = (Q, Σ, δ, q₀, F) */}
@@ -191,9 +304,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Transition Function δ */}
       <div className="sidebar-section">
-        <div className="section-title">
-          <ArrowRightLeft size={14} />
-          Transition Function δ
+        <div className="section-title" style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <ArrowRightLeft size={14} />
+            Transition Function δ
+          </div>
+          <button
+            className="btn btn-primary"
+            style={{ padding: '4px 12px', fontSize: '0.7rem', height: '24px' }}
+            onClick={onAddTransitionClick}
+          >
+            Add
+          </button>
         </div>
         {transitions.length === 0 ? (
           <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontStyle: 'italic' }}>

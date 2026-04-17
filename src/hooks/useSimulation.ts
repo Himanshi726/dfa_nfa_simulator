@@ -30,6 +30,8 @@ export interface SimulationState {
   status: SimulationStatus;
   /** Set of currently active state IDs (for highlighting) */
   activeStateIds: Set<string>;
+  /** Set of currently active transition IDs (for highlighting) */
+  activeTransitionIds: Set<string>;
   /** Playback speed in milliseconds */
   playbackSpeed: number;
 }
@@ -74,6 +76,7 @@ export function useSimulation(
       : null;
 
   const activeStateIds = currentStep?.activeStateIds ?? new Set<string>();
+  const activeTransitionIds = currentStep?.activeTransitionIds ?? new Set<string>();
 
   /** Pre-compute all simulation steps using the engine */
   const runSimulation = useCallback(() => {
@@ -189,6 +192,7 @@ export function useSimulation(
     currentStep,
     status,
     activeStateIds,
+    activeTransitionIds,
     playbackSpeed,
     setInputString,
     runSimulation,

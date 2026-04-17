@@ -25,6 +25,7 @@ interface CanvasProps {
   states: StateNode[];
   transitions: TransitionEntry[];
   activeStateIds: Set<string>;
+  activeTransitionIds: Set<string>;
   startStateId: string | null;
   onAddState: (x: number, y: number) => void;
   onMoveState: (id: string, x: number, y: number) => void;
@@ -128,6 +129,7 @@ export const AutomataCanvas: React.FC<CanvasProps> = ({
   states,
   transitions,
   activeStateIds,
+  activeTransitionIds,
   startStateId,
   onAddState,
   onMoveState,
@@ -203,25 +205,14 @@ export const AutomataCanvas: React.FC<CanvasProps> = ({
 
   const stateMap = new Map(states.map((s) => [s.id, s]));
 
-  // Group transitions by source-target pair for label merging
-  const edgeLabels: Record<string, { symbols: string[]; transitions: TransitionEntry[] }> = {};
+  // Group transitions by unordered pair of states so we can offset multiple edges
+  const transitionGroups: Record<string, TransitionEntry[]> = {};
   for (const t of transitions) {
-    const edgeKey = `${t.fromStateId}::${t.toStateId}`;
-    if (!edgeLabels[edgeKey]) {
-      edgeLabels[edgeKey] = { symbols: [], transitions: [] };
+    const sortedKey = [t.fromStateId, t.toStateId].sort().join('::');
+    if (!transitionGroups[sortedKey]) {
+      transitionGroups[sortedKey] = [];
     }
-    edgeLabels[edgeKey].symbols.push(t.symbol);
-    edgeLabels[edgeKey].transitions.push(t);
-  }
-
-  // Detect bidirectional pairs
-  const bidirectionalPairs = new Set<string>();
-  for (const key of Object.keys(edgeLabels)) {
-    const [from, to] = key.split('::');
-    const reverseKey = `${to}::${from}`;
-    if (from !== to && edgeLabels[reverseKey]) {
-      bidirectionalPairs.add([from, to].sort().join('::'));
-    }
+    transitionGroups[sortedKey].push(t);
   }
 
   return (
@@ -234,116 +225,192 @@ export const AutomataCanvas: React.FC<CanvasProps> = ({
       >
         <Layer>
           {/* Render transition arrows */}
-          {Object.entries(edgeLabels).map(([edgeKey, { symbols }]) => {
-            const [fromId, toId] = edgeKey.split('::');
-            const fromState = stateMap.get(fromId);
-            const toState = stateMap.get(toId);
-            if (!fromState || !toState) return null;
+          {Object.entries(transitionGroups).map(([groupKey, groupTransitions]) => {
+            const firstT = groupTransitions[0];
+            const isSelfLoop = firstT.fromStateId === firstT.toStateId;
 
-            // Self-loop
-            if (fromId === toId) {
-              const label = symbols.join(', ');
-              const cx = fromState.x;
-              const cy = fromState.y - STATE_RADIUS - 30;
+            if (isSelfLoop) {
+              const fromState = stateMap.get(firstT.fromStateId);
+              if (!fromState) return null;
+
+              const label = groupTransitions.map(t => t.symbol).join(', ');
+
+              // ─── Self-loop geometry ───────────────────────────────
+              // Two anchor points on the state circle, symmetric about
+              // the vertical axis, near the top of the state.
+              const anchorAngle = Math.PI * 0.20; // ≈36° from top
+              const leftAnchorX  = -STATE_RADIUS * Math.sin(anchorAngle);
+              const leftAnchorY  = -STATE_RADIUS * Math.cos(anchorAngle);
+              const rightAnchorX =  STATE_RADIUS * Math.sin(anchorAngle);
+              const rightAnchorY = -STATE_RADIUS * Math.cos(anchorAngle);
+
+              // Loop circle: sits above the state with clear separation.
+              const loopRadius = 20;
+              const loopGap = 8; // clearance above state edge
+              const loopCx = 0;
+              const loopCy = -(STATE_RADIUS + loopGap + loopRadius);
+
+              // We draw a cubic Bézier from leftAnchor → up around → rightAnchor
+              // Control points pull upward to create the loop shape.
+              const cpOffset = loopRadius * 1.6;
+              const cp1x = leftAnchorX - 8;
+              const cp1y = loopCy - cpOffset * 0.3;
+              const cp2x = rightAnchorX + 8;
+              const cp2y = loopCy - cpOffset * 0.3;
+
+              // Arrowhead direction: tangent at the rightAnchor end
+              // (pointing downward-left into the state)
+              const arrowDx = rightAnchorX - cp2x;
+              const arrowDy = rightAnchorY - cp2y;
+              const arrowAngle = Math.atan2(arrowDy, arrowDx);
+
+              const isAnyActive = groupTransitions.some(t => activeTransitionIds.has(t.id));
+              const highlightColor = "#f472b6"; // bright pink
+              const normalColor = "#9d5084"; // plum
+              const accentColor = "#fbcfe8"; // light pink for labels
 
               return (
-                <Group key={edgeKey}>
+                <Group key={groupKey} x={fromState.x} y={fromState.y}>
+                  {/* Loop path: Bézier curve from left anchor over the top to right anchor */}
                   <Shape
                     sceneFunc={(context, shape) => {
                       context.beginPath();
-                      const loopRadius = 22;
-                      const startAngle = -Math.PI * 0.75;
-                      const endAngle = -Math.PI * 0.25;
-                      
-                      // Compute start point on state circle
-                      const sx = fromState.x + STATE_RADIUS * Math.cos(-Math.PI * 0.7);
-                      const sy = fromState.y + STATE_RADIUS * Math.sin(-Math.PI * 0.7);
-                      
-                      context.moveTo(sx, sy);
-                      context.arc(
-                        cx,
-                        cy,
-                        loopRadius,
-                        Math.PI * 0.75,
-                        Math.PI * 0.25,
-                        true
+                      // Start at left anchor on state circle
+                      context.moveTo(leftAnchorX, leftAnchorY);
+                      // Cubic bezier going up, over, and back down
+                      context.bezierCurveTo(
+                        leftAnchorX - 14, loopCy - loopRadius * 0.8,  // CP1: pull up-left
+                        rightAnchorX + 14, loopCy - loopRadius * 0.8, // CP2: pull up-right
+                        rightAnchorX, rightAnchorY                      // End at right anchor
                       );
-                      
                       context.strokeShape(shape);
                     }}
-                    stroke="#64748b"
-                    strokeWidth={2}
+                    stroke={isAnyActive ? highlightColor : normalColor}
+                    strokeWidth={isAnyActive ? 3 : 2}
                   />
-                  {/* Arrow head for self-loop */}
-                  <Arrow
-                    points={[
-                      fromState.x + STATE_RADIUS * Math.cos(-Math.PI * 0.3),
-                      fromState.y + STATE_RADIUS * Math.sin(-Math.PI * 0.3) - 2,
-                      fromState.x + STATE_RADIUS * Math.cos(-Math.PI * 0.3),
-                      fromState.y + STATE_RADIUS * Math.sin(-Math.PI * 0.3),
-                    ]}
-                    pointerLength={8}
-                    pointerWidth={8}
-                    fill="#64748b"
-                    stroke="#64748b"
-                    strokeWidth={0}
+                  {/* Arrowhead at the right anchor (re-entry point) */}
+                  <Shape
+                    sceneFunc={(context, shape) => {
+                      const headLen = 10;
+                      const headWidth = 8;
+
+                      const tipX = rightAnchorX;
+                      const tipY = rightAnchorY;
+
+                      // Compute tangent at endpoint from last control point
+                      const tx = tipX - (rightAnchorX + 14);
+                      const ty = tipY - (loopCy - loopRadius * 0.8);
+                      const tAngle = Math.atan2(ty, tx);
+
+                      const leftX = tipX - headLen * Math.cos(tAngle) + (headWidth / 2) * Math.sin(tAngle);
+                      const leftY = tipY - headLen * Math.sin(tAngle) - (headWidth / 2) * Math.cos(tAngle);
+                      const rightX2 = tipX - headLen * Math.cos(tAngle) - (headWidth / 2) * Math.sin(tAngle);
+                      const rightY2 = tipY - headLen * Math.sin(tAngle) + (headWidth / 2) * Math.cos(tAngle);
+
+                      context.beginPath();
+                      context.moveTo(tipX, tipY);
+                      context.lineTo(leftX, leftY);
+                      context.lineTo(rightX2, rightY2);
+                      context.closePath();
+                      context.fillShape(shape);
+                    }}
+                    fill={isAnyActive ? highlightColor : normalColor}
                   />
+                  {/* Transition label above the loop */}
                   <Text
-                    x={cx - 20}
-                    y={cy - loopLabelOffset(symbols.length)}
+                    x={loopCx}
+                    y={loopCy - loopRadius - 6}
                     text={label}
                     fontSize={13}
                     fontFamily="JetBrains Mono, monospace"
-                    fill="#f59e0b"
+                    fill={isAnyActive ? highlightColor : accentColor}
                     fontStyle="bold"
-                    width={40}
+                    width={120}
                     align="center"
+                    offsetX={60}
+                    offsetY={8}
+                    shadowColor={isAnyActive ? highlightColor : "transparent"}
+                    shadowBlur={isAnyActive ? 8 : 0}
                   />
                 </Group>
               );
             }
 
-            // Regular transition
-            const sortedKey = [fromId, toId].sort().join('::');
-            const isBidir = bidirectionalPairs.has(sortedKey);
-            const curvature = isBidir ? (fromId < toId ? 1 : -1) : 0;
-            
-            const { points, textX, textY } = computeArrowPoints(
-              fromState.x,
-              fromState.y,
-              toState.x,
-              toState.y,
-              STATE_RADIUS,
-              curvature
-            );
+            const [minId, maxId] = groupKey.split('::');
+            const forwardEdges = groupTransitions.filter(t => t.fromStateId === minId);
+            const backwardEdges = groupTransitions.filter(t => t.fromStateId === maxId);
 
-            const label = symbols.join(', ');
+            const edgesToDraw = [];
+            if (forwardEdges.length > 0) {
+              edgesToDraw.push({
+                labels: forwardEdges.map(t => t.symbol).join(', '),
+                t: forwardEdges[0]
+              });
+            }
+            if (backwardEdges.length > 0) {
+              edgesToDraw.push({
+                labels: backwardEdges.map(t => t.symbol).join(', '),
+                t: backwardEdges[0]
+              });
+            }
 
-            return (
-              <Group key={edgeKey}>
-                <Arrow
-                  points={points}
-                  pointerLength={ARROW_HEAD_SIZE}
-                  pointerWidth={ARROW_HEAD_SIZE}
-                  fill="#64748b"
-                  stroke="#64748b"
-                  strokeWidth={2}
-                  tension={curvature !== 0 ? 0.5 : 0}
-                  lineCap="round"
-                  lineJoin="round"
-                />
-                {/* Transition label background */}
-                <Text
-                  x={textX - label.length * 4}
-                  y={textY}
-                  text={label}
-                  fontSize={13}
-                  fontFamily="JetBrains Mono, monospace"
-                  fill="#f59e0b"
-                  fontStyle="bold"
-                />
-              </Group>
-            );
+            // If we have arrows pointing both ways, bend them left (curvature = 1.0) relative to their own direction so they form an eye shape.
+            const curvature = edgesToDraw.length === 2 ? 1.0 : 0;
+
+              const isAnyActive = groupTransitions.some(t => activeTransitionIds.has(t.id));
+              const highlightColor = "#f472b6"; // bright pink
+              const normalColor = "#9d5084"; // plum
+              const accentColor = "#fbcfe8"; // light pink for labels
+
+              return edgesToDraw.map((edge) => {
+                const fromState = stateMap.get(edge.t.fromStateId);
+                const toState = stateMap.get(edge.t.toStateId);
+                if (!fromState || !toState) return null;
+
+                const { points, textX, textY } = computeArrowPoints(
+                  fromState.x,
+                  fromState.y,
+                  toState.x,
+                  toState.y,
+                  STATE_RADIUS,
+                  curvature
+                );
+                
+                // Specific edge is active if any of its symbol transitions are active
+                const isActive = groupTransitions
+                  .filter(t => t.fromStateId === edge.t.fromStateId && t.toStateId === edge.t.toStateId)
+                  .some(t => activeTransitionIds.has(t.id));
+
+                return (
+                  <Group key={`${edge.t.fromStateId}-${edge.t.toStateId}`}>
+                    <Arrow
+                      points={points}
+                      pointerLength={ARROW_HEAD_SIZE}
+                      pointerWidth={ARROW_HEAD_SIZE}
+                      fill={isActive ? highlightColor : normalColor}
+                      stroke={isActive ? highlightColor : normalColor}
+                      strokeWidth={isActive ? 3 : 2}
+                      tension={curvature !== 0 ? 0.5 : 0}
+                      lineCap="round"
+                      lineJoin="round"
+                      shadowColor={isActive ? highlightColor : "transparent"}
+                      shadowBlur={isActive ? 10 : 0}
+                    />
+                    {/* Transition label */}
+                    <Text
+                      x={textX - edge.labels.length * 4}
+                      y={textY}
+                      text={edge.labels}
+                      fontSize={13}
+                      fontFamily="JetBrains Mono, monospace"
+                      fill={isActive ? highlightColor : accentColor}
+                      fontStyle="bold"
+                      shadowColor={isActive ? highlightColor : "transparent"}
+                      shadowBlur={isActive ? 8 : 0}
+                    />
+                  </Group>
+                );
+              });
           })}
 
           {/* Start state arrow indicator */}
@@ -357,8 +424,8 @@ export const AutomataCanvas: React.FC<CanvasProps> = ({
                 points={[arrowStartX, startState.y, arrowEndX, startState.y]}
                 pointerLength={10}
                 pointerWidth={10}
-                fill="#60a5fa"
-                stroke="#60a5fa"
+                fill="#db2777"
+                stroke="#db2777"
                 strokeWidth={2}
               />
             );
@@ -394,10 +461,10 @@ export const AutomataCanvas: React.FC<CanvasProps> = ({
                   <Circle
                     radius={STATE_RADIUS + 8}
                     fill="transparent"
-                    stroke="#fbbf24"
+                    stroke="#f472b6"
                     strokeWidth={3}
                     opacity={0.6}
-                    shadowColor="#fbbf24"
+                    shadowColor="#f472b6"
                     shadowBlur={20}
                     shadowOpacity={0.5}
                   />
@@ -407,7 +474,7 @@ export const AutomataCanvas: React.FC<CanvasProps> = ({
                 {state.isAccepting && (
                   <Circle
                     radius={STATE_RADIUS + 5}
-                    stroke={isActive ? '#fbbf24' : '#60a5fa'}
+                    stroke={isActive ? '#f472b6' : '#db2777'}
                     strokeWidth={2}
                     fill="transparent"
                   />
@@ -418,20 +485,20 @@ export const AutomataCanvas: React.FC<CanvasProps> = ({
                   radius={STATE_RADIUS}
                   fill={
                     isActive
-                      ? 'rgba(251, 191, 36, 0.15)'
-                      : 'rgba(30, 41, 59, 0.95)'
+                      ? 'rgba(244, 114, 182, 0.15)'
+                      : 'rgba(66, 32, 58, 0.95)'
                   }
                   stroke={
                     isActive
-                      ? '#fbbf24'
+                      ? '#f472b6'
                       : isStart
-                      ? '#60a5fa'
-                      : '#475569'
+                      ? '#db2777'
+                      : '#703b5f'
                   }
                   strokeWidth={isActive ? 3 : 2}
                   shadowColor={
                     isActive
-                      ? '#fbbf24'
+                      ? '#f472b6'
                       : 'transparent'
                   }
                   shadowBlur={isActive ? 15 : 0}
@@ -444,7 +511,7 @@ export const AutomataCanvas: React.FC<CanvasProps> = ({
                   fontSize={15}
                   fontFamily="JetBrains Mono, monospace"
                   fontStyle="600"
-                  fill={isActive ? '#fbbf24' : '#e2e8f0'}
+                  fill={isActive ? '#fdf2f8' : '#fbcfe8'}
                   align="center"
                   verticalAlign="middle"
                   offsetX={state.label.length * 4.5}
@@ -463,7 +530,7 @@ export const AutomataCanvas: React.FC<CanvasProps> = ({
                 stateMap.get(transitionFrom)!.x,
                 stateMap.get(transitionFrom)!.y,
               ]}
-              stroke="#60a5fa"
+              stroke="#db2777"
               strokeWidth={2}
               dash={[8, 4]}
               opacity={0.5}
@@ -488,17 +555,18 @@ export const AutomataCanvas: React.FC<CanvasProps> = ({
             top: 12,
             left: '50%',
             transform: 'translateX(-50%)',
-            background: 'rgba(59, 130, 246, 0.2)',
-            border: '1px solid rgba(59, 130, 246, 0.4)',
-            borderRadius: 8,
-            padding: '6px 16px',
-            color: '#60a5fa',
+            background: 'rgba(219, 39, 119, 0.15)',
+            border: '1px solid rgba(219, 39, 119, 0.4)',
+            borderRadius: 10,
+            padding: '8px 20px',
+            color: '#fbcfe8',
             fontSize: '0.8rem',
             fontWeight: 600,
             zIndex: 5,
+            boxShadow: '0 4px 12px rgba(0,0,0,0.2)'
           }}
         >
-          Click a target state to create transition · <kbd style={{ fontSize: '0.7rem' }}>Esc</kbd> to cancel
+          Click a target state to create transition · <kbd style={{ fontSize: '0.7rem', background: '#331a2d', padding: '2px 6px', borderRadius: '4px', border: '1px solid #703b5f' }}>Esc</kbd> to cancel
         </div>
       )}
     </div>

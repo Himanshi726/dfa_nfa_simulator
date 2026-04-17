@@ -102,6 +102,8 @@ export interface SimulationStep {
   symbolConsumed: AlphabetSymbol | null;
   /** The set of currently active states (for NFA, may be multiple) */
   activeStateIds: Set<string>;
+  /** The set of transitions taken to reach these active states */
+  activeTransitionIds: Set<string>;
   /** Human-readable description of this step */
   description: string;
 }

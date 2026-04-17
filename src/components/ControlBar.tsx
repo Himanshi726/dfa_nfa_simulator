@@ -28,6 +28,7 @@ export const ControlBar: React.FC<ControlBarProps> = ({
   result,
   currentStepIndex,
   status,
+  activeTransitionIds,
   playbackSpeed,
   setInputString,
   runSimulation,
